@@ -1,177 +1,122 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "Sense Energy Monitor",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Unofficial: Sense energy monitor (US/Canada), live power, daily energy and detected devices.",
+    "fr": "Non officiel : moniteur Sense (USA/Canada), puissance en direct, énergie du jour, appareils."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
-  "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-sense:0.1.0",
+  "gladys_version": ">=5.2.0",
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-sense/main/cover.png",
+  "categories": ["energy"],
+  "transports": ["cloud"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Sense account (United States and Canada)",
+        "fr": "Compte Sense (États-Unis et Canada)"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "Unofficial connector, not affiliated with Sense Labs: it uses the same cloud API as the Sense app, which Sense does not document and may change. Enter the e-mail and password of your Sense account. If your account uses two-factor authentication, save, then enter the 6-digit code of your authenticator app with the \"Enter the two-factor code\" button below: the session is then kept and renewed by itself.",
+        "fr": "Connecteur non officiel, sans lien avec Sense Labs : il utilise la même API cloud que l'application Sense, que Sense ne documente pas et peut changer. Saisissez l'e-mail et le mot de passe de votre compte Sense. Si votre compte utilise la double authentification, enregistrez, puis saisissez le code à 6 chiffres de votre application d'authentification avec le bouton « Saisir le code de double authentification » ci-dessous : la session est ensuite gardée et renouvelée toute seule."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-sense/blob/main/docs/fr.md",
+          "label": {
+            "en": "Guide (French)",
+            "fr": "Guide (français)"
+          }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-sense/blob/main/docs/en.md",
+          "label": {
+            "en": "Guide (English)",
+            "fr": "Guide (anglais)"
+          }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
-      "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
-      },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
+      "key": "email",
+      "type": "string",
       "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "label": {
+        "en": "Sense e-mail",
+        "fr": "E-mail Sense"
+      },
+      "placeholder": {
+        "en": "e.g. me@example.com",
+        "fr": "ex. moi@exemple.com"
+      }
     },
     {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
-      "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
-      },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
+      "key": "password",
+      "type": "secret",
       "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
-    },
-    {
-      "key": "unit",
-      "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
-      "required": false,
-      "default": "celsius",
-      "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
-      ]
-    },
-    {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
-      "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+      "label": {
+        "en": "Sense password",
+        "fr": "Mot de passe Sense"
       },
+      "description": {
+        "en": "Stored encrypted by Gladys and only sent to api.sense.com, to sign in.",
+        "fr": "Stocké chiffré par Gladys et envoyé uniquement à api.sense.com, pour se connecter."
+      }
+    },
+    {
+      "key": "appliances",
+      "type": "boolean",
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": false,
+      "label": {
+        "en": "Devices detected by Sense",
+        "fr": "Appareils détectés par Sense"
+      },
+      "description": {
+        "en": "Also offer one device per appliance Sense detected (on/off and power, read only).",
+        "fr": "Propose aussi un appareil par équipement détecté par Sense (marche/arrêt et puissance, lecture seule)."
+      }
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "test_connection",
+      "label": {
+        "en": "Test the connection",
+        "fr": "Tester la connexion"
+      },
       "timeout_seconds": 30
     },
     {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
+      "key": "verify_mfa",
+      "label": {
+        "en": "Enter the two-factor code",
+        "fr": "Saisir le code de double authentification"
       },
+      "timeout_seconds": 60,
       "fields": [
         {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
+          "key": "code",
           "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
+          "required": true,
+          "label": {
+            "en": "6-digit code",
+            "fr": "Code à 6 chiffres"
+          },
+          "description": {
+            "en": "The current code of your authenticator app for Sense.",
+            "fr": "Le code actuel de votre application d'authentification pour Sense."
+          },
+          "placeholder": {
+            "en": "123456",
+            "fr": "123456"
+          }
         }
       ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
     }
   ]
 }
