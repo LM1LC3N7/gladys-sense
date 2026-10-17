@@ -3,7 +3,7 @@
 **Unofficial connector, not affiliated with Sense Labs.** It brings your
 **Sense** energy monitor (United States and Canada) into Gladys: the power your
 home consumes (and produces, with solar) in real time, the voltage and the
-frequency, today's energy for the Gladys energy monitoring, and, as an option,
+frequency, the hourly consumption for the Gladys energy monitoring, and, as an option,
 the devices Sense detected. It uses the same cloud API as the Sense app, which
 Sense does not document and may change at any time.
 
@@ -13,12 +13,12 @@ Sense does not document and may change at any time.
 
 ## What you get
 
-| Surface                              | Content                                                                                                                                   |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| One device per **Sense monitor**     | power consumed (W), voltage L1 and L2 (V), frequency (Hz), today's consumption (kWh), the 30-minute consumption for the energy monitoring |
-| With **solar**                       | power produced (W), today's production, energy imported from and exported to the grid today (kWh)                                         |
-| Option **Devices detected by Sense** | one device per appliance Sense detected: on/off and power (W), read only                                                                  |
-| Buttons                              | **Test the connection**, **Enter the two-factor code**                                                                                    |
+| Surface                              | Content                                                                                                        |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| One device per **Sense monitor**     | power consumed (W), voltage L1 and L2 (V), frequency (Hz), the 30-minute consumption for the energy monitoring |
+| With **solar**                       | power produced (W), grid power (W, signed: positive when importing, negative when exporting)                   |
+| Option **Devices detected by Sense** | one device per appliance Sense detected: on/off and power (W), read only                                       |
+| Buttons                              | **Test the connection**, **Enter the two-factor code**                                                         |
 
 ## Installation
 
@@ -38,9 +38,12 @@ The real-time feed gives power, not energy. The integration therefore reads
 Sense's hourly consumption every 15 minutes and publishes each finished hour of
 today and yesterday as two **dated** half hours on the "Consumption (30 min)"
 feature: the energy monitoring gets the right energy in the right half hour,
-and can price it with your contract. Yesterday is read again once a day, after
-midnight (monitor time), for its last hours. The "today" features (consumption,
-production, import, export) are running totals reset at midnight by Sense.
+and can price it with your contract; the energy of a day is the sum of its half
+hours. Yesterday is read again at every refresh during the first 3 hours of the
+day (monitor time), for its last hours. Only today and yesterday are read: no
+older history is filled in, so a Gladys stopped for more than a day keeps a
+gap. The production, the import and the export have no daily total yet (the
+grid power shows the exchange in real time).
 
 ## Detected devices
 
@@ -54,15 +57,20 @@ reached, they wait for the next minute, never the monitor's.
 
 - Sense accounts of the United States and Canada; the first monitor of the
   account only.
-- Calls: one real-time WebSocket; today's trends every 15 minutes (two calls
-  with solar), yesterday once a day, the detected devices every 6 hours.
+- Calls: one real-time WebSocket; today's hourly consumption every 15 minutes,
+  yesterday's once a day (at every refresh during the first 3 hours of the
+  day), the detected devices every 6 hours.
   Published states: the monitor at most every 10 seconds, the power of the
   detected devices at most every minute.
 - Reconnection of the real-time feed: from 5 seconds up to 5 minutes, with a
   random part. After a failed sign-in: 5, 15, then every 60 minutes. Refused
   e-mail or password: every 6 hours. When Sense asks to slow down (429), every
-  call waits the time asked (15 minutes otherwise).
+  call waits the time asked (15 minutes otherwise), between 1 minute and 6
+  hours.
 - Gladys has no frequency unit: the frequency is a plain number.
+- The half hours are those of the monitor's clock hours: a time zone offset by
+  45 minutes (Gladys or monitor) does not fit the 30-minute grid of Gladys, and
+  the energy monitoring then refuses them.
 
 ## Troubleshooting
 
@@ -79,9 +87,10 @@ reached, they wait for the next minute, never the monitor's.
 
 ## Privacy
 
-The password is stored encrypted by Gladys and only sent to `api.sense.com` to
-sign in. The session tokens are stored in the integration's configuration,
-outside the form. Nothing is logged with the e-mail, the password or a token.
+The password is kept by Gladys in its database, never shown again, and only
+sent to `api.sense.com` to sign in. The session tokens (access and refresh) are
+kept in the same place, in the integration's configuration, outside the form.
+Nothing is logged with the e-mail, the password or a token.
 
 ## Credits
 

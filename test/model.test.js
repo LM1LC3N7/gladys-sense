@@ -1,23 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  appliancesOf,
-  dayTotals,
-  halfHoursOf,
-  liveOf,
-  monitorOf,
-  trendStart,
-} from '../src/sense/model.js';
-import { decodeAll } from '../src/sense/msgpack.js';
+import { appliancesOf, halfHoursOf, liveOf, monitorOf, trendStart } from '../src/sense/model.js';
+import { MAX_DEPTH, decode, decodeAll } from '../src/sense/msgpack.js';
 import { encode } from './helpers/fakeSocket.js';
 import {
   NOW,
-  TODAY_START,
   at,
   devicesOverview,
   overview,
   realtime,
-  solarUsage,
   todayUsage,
   usage,
 } from './fixtures/sense.js';
@@ -48,6 +39,10 @@ test('a realtime update: rounded, non-negative, devices by id', () => {
   assert.equal(live.production, 1801);
   assert.deepEqual(live.voltage, [121.3, 120.9]);
   assert.equal(live.frequency, 59.99);
+  assert.equal(live.grid, 700, 'consumed minus produced, signed');
+  assert.equal(liveOf(realtime({ w: 500, solar_w: 1800 })).grid, -1300, 'exporting');
+  assert.equal(liveOf(realtime({ grid_w: 42.4 })).grid, 42, 'the own value first');
+  assert.equal(liveOf({}).grid, null);
   assert.deepEqual(
     [...live.devices],
     [
@@ -61,20 +56,6 @@ test('a realtime update: rounded, non-negative, devices by id', () => {
   assert.equal(empty.production, null);
   assert.deepEqual(empty.voltage, [null, null]);
   assert.equal(liveOf({ devices: 'nonsense' }).devices, undefined);
-});
-
-test("today's totals, with and without solar", () => {
-  assert.deepEqual(dayTotals(todayUsage(), solarUsage()), {
-    start: TODAY_START,
-    consumption: 14.4,
-    production: 11.3,
-    fromGrid: 6.2,
-    toGrid: 3.1,
-  });
-  const noSolar = dayTotals(todayUsage());
-  assert.equal(noSolar.consumption, 14.4);
-  assert.equal(noSolar.production, null);
-  assert.equal(noSolar.fromGrid, null);
 });
 
 test('the finished hours become two dated half hours each', () => {
@@ -150,4 +131,13 @@ test('MessagePack: the Sense frame layout and the usual types', () => {
     [],
   );
   assert.throws(() => decodeAll(Uint8Array.from([0xc1])), /Invalid MessagePack/);
+  // The bytes of a cut value are returned, to be completed by the next frame.
+  const cut = decode(Uint8Array.from([0x01, 0xa3, 0x61]));
+  assert.deepEqual(cut.values, [1]);
+  assert.deepEqual([...cut.rest], [0xa3, 0x61]);
+  assert.deepEqual(decode(Uint8Array.from([...cut.rest, 0x62, 0x63])).values, ['abc']);
+  // Nesting is bounded.
+  const deep = Uint8Array.from([...Array(MAX_DEPTH + 2).fill(0x91), 1]);
+  assert.throws(() => decodeAll(deep), /nested too deep/);
+  assert.deepEqual(decodeAll(Uint8Array.from([0x91, 0x91, 1])), [[[1]]]);
 });

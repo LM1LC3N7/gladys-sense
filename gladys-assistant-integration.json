@@ -63,8 +63,8 @@
         "fr": "Mot de passe Sense"
       },
       "description": {
-        "en": "Stored encrypted by Gladys and only sent to api.sense.com, to sign in.",
-        "fr": "Stocké chiffré par Gladys et envoyé uniquement à api.sense.com, pour se connecter."
+        "en": "Kept by Gladys in its database, never shown again, and only sent to api.sense.com to sign in. The session tokens are kept in the same place.",
+        "fr": "Gardé par Gladys dans sa base, jamais réaffiché, et envoyé seulement à api.sense.com pour se connecter. Les jetons de session sont gardés au même endroit."
       }
     },
     {

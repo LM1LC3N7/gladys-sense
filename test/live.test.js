@@ -151,3 +151,55 @@ test('frames and auth errors', () => {
   assert.equal(isAuthError({ error_reason: 'Token expired' }), true);
   assert.equal(isAuthError({ error_reason: 'Monitor offline' }), false);
 });
+
+test('a MessagePack message split over two frames is joined', () => {
+  const { feed, last, updates } = setup();
+  feed.start();
+  const bytes = Uint8Array.from([
+    ...encode('realtime_update'),
+    ...encode(1),
+    ...encode(realtime()),
+  ]);
+  last().receiveBinary(bytes.subarray(0, 30));
+  assert.equal(updates.length, 0);
+  last().receiveBinary(bytes.subarray(30));
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].w, 2500.4);
+  feed.stop();
+});
+
+test('unusable frames: dropped, logged once, too large refused', () => {
+  const { feed, last, updates, logs } = setup();
+  feed.start();
+  last().receive('ignored');
+  last().onmessage({ data: 'not json' });
+  last().onmessage({ data: 'still not json' });
+  last().receiveBinary(Uint8Array.from([0xc1]));
+  last().receiveBinary(new Uint8Array(1024 * 1024 + 1).fill(0xdc));
+  assert.equal(logs.filter((l) => l.includes('frame ignored')).length, 1);
+  last().receiveBinary(
+    Uint8Array.from([...encode('realtime_update'), ...encode(1), ...encode(realtime())]),
+  );
+  assert.equal(updates.length, 1, 'the feed goes on after them');
+  feed.stop();
+});
+
+test('Node 22: an error on a socket that is not open counts as a closure', async () => {
+  const { feed, sockets, last, timers, auth } = setup();
+  feed.start();
+  last().fail();
+  assert.equal(retries(timers).length, 1, 'a reconnection is scheduled');
+  last().onclose?.({ code: 1006 }); // a late close event changes nothing
+  assert.equal(retries(timers).length, 1);
+  await timers.runTimeouts((t) => t.ms !== LIVE_SILENCE);
+  assert.equal(sockets.length, 2);
+  last().fail();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(auth.calls, 1, 'two refused handshakes: the token is suspected');
+  // An error on an open socket waits for its close event.
+  await timers.runTimeouts((t) => t.ms !== LIVE_SILENCE);
+  last().onerror({ message: 'glitch' });
+  assert.equal(last().closed, false);
+  feed.stop();
+});

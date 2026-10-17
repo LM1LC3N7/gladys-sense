@@ -14,7 +14,7 @@
 // -----------------------------------------------------------------------------
 
 import { randomUUID } from 'node:crypto';
-import { RATE_LIMIT_PAUSE, RENEW_MIN_GAP } from '../constants.js';
+import { RATE_LIMIT_MAX, RATE_LIMIT_MIN, RATE_LIMIT_PAUSE, RENEW_MIN_GAP } from '../constants.js';
 import { SenseError, request } from '../http.js';
 
 /** A new client id, as sense-energy makes it (uuid4 without dashes). */
@@ -71,8 +71,14 @@ export class SenseClient {
       return await this.send(path, { deviceId: this.deviceId, ...options });
     } catch (err) {
       if (err instanceof SenseError && err.code === 'rate_limited') {
-        this.pausedUntil = this.now() + (err.retryAfter ?? RATE_LIMIT_PAUSE);
-        err.retryAfter = this.pausedUntil - this.now();
+        // Bounded: a Retry-After of 0 or in the past would retry at once,
+        // a huge one would silence the integration for good.
+        const pause = Math.min(
+          RATE_LIMIT_MAX,
+          Math.max(RATE_LIMIT_MIN, err.retryAfter ?? RATE_LIMIT_PAUSE),
+        );
+        this.pausedUntil = this.now() + pause;
+        err.retryAfter = pause;
       }
       throw err;
     }
@@ -142,9 +148,12 @@ export class SenseClient {
         },
       });
     } catch (err) {
-      if (err instanceof SenseError && err.code === 'unauthorized') {
-        // A refused or stale code: the next try signs in again for a fresh mfa token.
+      // A refused or stale code, or any other 4xx: the next try signs in
+      // again for a fresh mfa token.
+      if (err instanceof SenseError && err.status >= 400 && err.status < 500) {
         this.mfaToken = '';
+      }
+      if (err instanceof SenseError && err.code === 'unauthorized') {
         throw new SenseError('bad_mfa', err.message, err.status);
       }
       throw err;
@@ -183,21 +192,14 @@ export class SenseClient {
         });
         return this.setAuth(data);
       } catch (err) {
-        // Only a refused renewal (401/403, or another 4xx) falls back to the
-        // password; a network error, a 5xx or a 429 stays what it is.
-        const refused =
-          err instanceof SenseError &&
-          (err.code === 'unauthorized' ||
-            err.code === 'not_found' ||
-            (err.code === 'http' && err.status >= 400 && err.status < 500));
-        if (!refused) {
+        // Only a real refusal of the renewal (401, or 403 with Sense's error)
+        // falls back to the password; anything else stays what it is.
+        if (!(err instanceof SenseError) || err.code !== 'unauthorized') {
           throw err;
         }
       }
     }
-    this.accessToken = '';
-    this.refreshToken = '';
-    this.onSession(this.session());
+    // The stored session is replaced only once the sign-in succeeded (setAuth).
     return this.login();
   }
 
@@ -228,10 +230,9 @@ export class SenseClient {
   }
 
   /** The DAY trend containing `start` (a `YYYY-MM-DDTHH:MM:SS` UTC string). */
-  usage(start, { solar = false } = {}) {
-    const kind = solar ? 'history/usage/solar' : 'history/usage';
+  usage(start) {
     return this.get(
-      `app/monitors/${encodeURIComponent(this.monitorId)}/${kind}?scale=DAY&start=${encodeURIComponent(start)}`,
+      `app/monitors/${encodeURIComponent(this.monitorId)}/history/usage?scale=DAY&start=${encodeURIComponent(start)}`,
     );
   }
 }

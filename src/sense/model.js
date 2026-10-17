@@ -3,8 +3,8 @@
 //
 // Ported from sense-energy (scottbonline/sense, MIT): the filtering of the
 // detected devices (`fetch_devices`), the realtime payload (`_set_realtime`),
-// the daily totals with solar (`_transform_usage_response`) and the `start`
-// parameter of the trends (`_format_trend_start`).
+// the hourly breakdown of a DAY answer (`_transform_hour_response`) and the
+// `start` parameter of the trends (`_format_trend_start`).
 // -----------------------------------------------------------------------------
 
 const num = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
@@ -67,6 +67,7 @@ export function appliancesOf(overview) {
 
 /**
  * A `realtime_update` payload: consumed power `w`, produced power `solar_w`,
+ * the grid exchange (`grid_w`, else `w` - `solar_w`),
  * the voltage of each leg, the frequency, the power of each detected device.
  * `devices` is undefined when the payload lists none (sense-energy keeps the
  * previous values then).
@@ -83,28 +84,16 @@ export function liveOf(payload = {}) {
   }
   const power = num(payload.w);
   const solar = num(payload.solar_w);
+  // Grid exchange, signed (import > 0, export < 0): the feed's own value when
+  // it gives one, else consumed minus produced.
+  const gridRaw = num(payload.grid_w) ?? (power === null ? null : power - (solar ?? 0));
   return {
     power: power === null ? null : Math.max(0, Math.round(power)),
     production: solar === null ? null : Math.max(0, Math.round(solar)),
     voltage: [round(voltage[0], 1), round(voltage[1], 1)],
     frequency: round(payload.hz, 2),
+    grid: gridRaw === null ? null : Math.round(gridRaw),
     devices,
-  };
-}
-
-/**
- * Today's totals (kWh) from a DAY `history/usage` answer and, with solar, the
- * `history/usage/solar` one: consumed, produced, imported from and exported
- * to the grid. A total Sense did not give is null.
- */
-export function dayTotals(usage, solar) {
-  const total = solar?.total;
-  return {
-    start: typeof usage?.start === 'string' ? usage.start : null,
-    consumption: round(usage?.consumption?.usage_total_kwh, 3),
-    production: total ? round(total.production_kwh ?? 0, 3) : null,
-    fromGrid: total ? round(total.from_grid_kwh, 3) : null,
-    toGrid: total ? round(total.to_grid_kwh, 3) : null,
   };
 }
 

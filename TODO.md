@@ -4,8 +4,8 @@
 
 - [ ] Test on a real Gladys 5.2+ with a real Sense account (with and without
       solar, with and without two-factor authentication): sign-in, the code
-      button, a restart without a new code, the real-time states, today's
-      totals, the 30-minute consumption in the energy monitoring, the detected
+      button, a restart without a new code, the real-time states, the grid
+      power with solar, the 30-minute consumption in the energy monitoring, the detected
       devices.
 - [ ] Turn on "Private vulnerability reporting" (SECURITY.md points there).
 - [ ] Add the `gladys-assistant-integration` topic to publish in the store
@@ -23,8 +23,13 @@
 - [ ] `history/usage?scale=DAY` answers the monitor's local day containing
       `start` (read as UTC), with one `usage_breakdown_kwh` value per clock
       hour from `start`, as sense-energy assumes.
-- [ ] The `solar` answer's `total.from_grid_kwh` / `to_grid_kwh` /
-      `production_kwh` for today.
+- [ ] The `grid-sensor` category and its `power` type exist in the core
+      from Gladys 5.2.0 (the SDK 0.15 mirror has them; the first core release
+      carrying them was not checked); otherwise raise `gladys_version`.
+- [ ] Whether the feed sends `grid_w`; otherwise the grid power is `w` -
+      `solar_w`.
+- [ ] How late Sense completes the last hours of a day (yesterday is read
+      again during the first 3 hours of the next one).
 - [ ] `setConfig` of a key outside the schema does not fire
       `onConfigUpdated` (a restart would be harmless: same settings are
       ignored), and saving the form keeps that key.
@@ -53,7 +58,15 @@
   sign-in), shared by concurrent callers; a refused renewal falls back to ONE
   password sign-in; refused credentials are retried every 6 hours only (never
   dead: a timer stays); MFA required waits for the user (a retry would only
-  ask again). A 429 pauses every call of the client.
+  ask again). A 429 pauses every call of the client, between 1 minute and
+  6 hours whatever Retry-After says. Only a 401, or a 403 with Sense's JSON
+  `error_reason`, is a refusal; a bare 403 (proxy, firewall) is a passing
+  error retried like a 5xx. The password fallback follows a real refusal of
+  `renew` only, and the stored session is replaced only by a successful
+  sign-in. Renewals asked by the feed have their own backoff (5 min doubling
+  up to 6 h, reset by the next realtime update). Errors of a job started
+  before a restart are ignored. The session writes (`setConfig`) are chained;
+  a failed one is written again with the next change.
 - **One real-time connection** (the first monitor of the account, as
   sense-energy), reconnected with backoff 5 s → 5 min and jitter (half to all
   of the step), reopened after 90 s of silence; two closures before the first
@@ -62,12 +75,27 @@
   cumulative index, so the dated 30-minute consumption
   (`publishEnergyConsumption`, from the hourly breakdown, finished hours only)
   is the meter of the energy monitoring; Gladys 5.2 is required for it.
-- **Today's totals** (running, reset at midnight by Sense): consumption as
-  `energy-sensor` / `daily-consumption` (as gladys-tibber's "today"),
-  production as `energy-production-sensor` / `daily-production`; import and
-  export have no daily type in the core: `energy-sensor` / `energy` (kWh),
-  not an index (an index must never go back). Units only from
-  `DEVICE_FEATURE_UNITS_BY_CATEGORY`.
+  The energy of a day is the sum of its half hours. Yesterday is read once a
+  day, and at every refresh during the first 3 hours of a day. No backfill
+  beyond yesterday. Half hours follow the monitor's clock hours: a zone
+  offset by 45 minutes does not fit Gladys' 30-minute grid.
+- **No daily totals** (review): an `energy-sensor` / `energy` feature is a
+  cumulative index for the core (an export would be counted and billed as
+  consumption), and `daily-consumption` / `daily-production` states never go
+  through `publishStates`. With solar, the real-time **grid power** is
+  published instead: `grid-sensor` / `power` (W, signed, import > 0), the
+  feed's `grid_w` when present, else `w` - `solar_w`. Units only from
+  `DEVICE_FEATURE_UNITS_BY_CATEGORY`. A test refuses any index type on the
+  devices.
+- **Real time first**: the feed starts once the monitor is known, even when
+  the first trend read fails (the trends are retried every 15 min).
+- **MessagePack**: values and the bytes of a cut value are kept from one frame
+  to the next (a message may span two frames); more than 1 MiB pending, or a
+  nesting deeper than 32, is refused; an unusable frame is logged once.
+- **Buttons answer fast**: `verify_mfa` answers as soon as Sense accepted the
+  code, the start runs in the background; `test_connection` answers within
+  10 s (the known status otherwise). Any 4xx of the code step forgets the
+  mfa token.
 - **Frequency**: the core has neither a frequency type nor a hertz unit:
   `unknown` / `decimal` without unit, "(Hz)" in the name.
 - **Detected devices**: `energy-sensor` / `binary` (on when power > 0, as

@@ -17,10 +17,13 @@ import {
   LIVE_HANDSHAKE_FAILURES,
   LIVE_RECONNECT,
   LIVE_SILENCE,
+  MSGPACK_MAX_BYTES,
   USER_AGENT,
   WS_URL,
 } from '../constants.js';
-import { decodeAll } from './msgpack.js';
+import { decode, decodeAll } from './msgpack.js';
+
+const OPEN = 1;
 
 /** Remove any token from a text before it reaches a log. */
 export const scrub = (text) => String(text ?? '').replace(/(access_token=)[^&\s"']+/gi, '$1***');
@@ -30,7 +33,7 @@ function defaultSocketFactory(url) {
   return new globalThis.WebSocket(url, { headers: { 'User-Agent': USER_AGENT } });
 }
 
-/** The messages of a frame: a JSON text, or MessagePack (type, epoch, payload) triples. */
+/** The messages of ONE self-contained frame: a JSON text, or MessagePack (type, epoch, payload) triples. */
 export function messagesOf(data) {
   if (typeof data === 'string') {
     try {
@@ -90,6 +93,9 @@ export class RealtimeFeed {
     this.stopped = true;
     this.connected = false;
     this.received = false;
+    this.pendingBytes = new Uint8Array(0);
+    this.pendingValues = [];
+    this.badFrameLogged = false;
   }
 
   start() {
@@ -146,6 +152,8 @@ export class RealtimeFeed {
     }
     this.socket = socket;
     this.received = false;
+    this.pendingBytes = new Uint8Array(0);
+    this.pendingValues = [];
     try {
       socket.binaryType = 'arraybuffer';
     } catch {
@@ -159,27 +167,40 @@ export class RealtimeFeed {
     };
     socket.onerror = (event) => {
       this.logger.warn(`Sense real-time feed error: ${scrub(event?.message ?? 'unknown')}`);
-    };
-    socket.onclose = (event) => {
-      if (this.socket !== socket) {
-        return; // closed by us
+      // Node 22 may report a refused handshake by an error without any close
+      // event: a socket that is not open is then handled as closed.
+      if (socket.readyState !== undefined && socket.readyState !== OPEN) {
+        this.closed(socket, { code: 1006 });
       }
-      this.socket = undefined;
-      this.timers.clearTimeout(this.silenceTimer);
-      this.silenceTimer = undefined;
-      this.setConnected(false);
-      this.logger.warn(`Sense real-time feed closed (${event?.code ?? '?'})`);
-      if (!this.received) {
-        // Refused before the first message: a 401 at the handshake looks like
-        // this. Twice in a row, the token is suspected and renewed.
-        this.handshakeFailures += 1;
-        if (this.handshakeFailures >= LIVE_HANDSHAKE_FAILURES) {
-          this.handshakeFailures = 0;
-          this.authFailed();
-        }
-      }
-      this.scheduleReconnect();
     };
+    socket.onclose = (event) => this.closed(socket, event);
+  }
+
+  /** The socket is gone (close event, or an error on a socket that is not open). */
+  closed(socket, event) {
+    if (this.socket !== socket) {
+      return; // closed by us, or already handled
+    }
+    this.socket = undefined;
+    try {
+      socket.close();
+    } catch {
+      // already closed
+    }
+    this.timers.clearTimeout(this.silenceTimer);
+    this.silenceTimer = undefined;
+    this.setConnected(false);
+    this.logger.warn(`Sense real-time feed closed (${event?.code ?? '?'})`);
+    if (!this.received) {
+      // Refused before the first message: a 401 at the handshake looks like
+      // this. Twice in a row, the token is suspected and renewed.
+      this.handshakeFailures += 1;
+      if (this.handshakeFailures >= LIVE_HANDSHAKE_FAILURES) {
+        this.handshakeFailures = 0;
+        this.authFailed();
+      }
+    }
+    this.scheduleReconnect();
   }
 
   /** Reopen a feed that went silent (a half-open TCP connection never closes by itself). */
@@ -203,7 +224,7 @@ export class RealtimeFeed {
     this.received = true;
     this.handshakeFailures = 0;
     this.watch();
-    for (const message of messagesOf(data)) {
+    for (const message of this.frameMessages(data)) {
       if (message.type === 'realtime_update') {
         this.attempts = 0;
         this.setConnected(true);
@@ -222,6 +243,64 @@ export class RealtimeFeed {
         this.scheduleReconnect();
         return;
       }
+    }
+  }
+
+  /**
+   * The messages of a frame. MessagePack values and the bytes of a value cut
+   * at the end of a frame are kept for the next one (a message may span two
+   * frames); more than MSGPACK_MAX_BYTES pending is refused.
+   */
+  frameMessages(data) {
+    if (typeof data === 'string') {
+      const messages = messagesOf(data);
+      if (messages.length === 0) {
+        this.badFrame('not JSON');
+      }
+      return messages;
+    }
+    let bytes;
+    if (data instanceof Uint8Array) {
+      bytes = data;
+    } else if (data instanceof ArrayBuffer) {
+      bytes = new Uint8Array(data);
+    } else {
+      this.badFrame('unknown frame type');
+      return [];
+    }
+    if (this.pendingBytes.length + bytes.length > MSGPACK_MAX_BYTES) {
+      this.pendingBytes = new Uint8Array(0);
+      this.pendingValues = [];
+      this.badFrame('frame too large');
+      return [];
+    }
+    const joined = new Uint8Array(this.pendingBytes.length + bytes.length);
+    joined.set(this.pendingBytes);
+    joined.set(bytes, this.pendingBytes.length);
+    let decoded;
+    try {
+      decoded = decode(joined);
+    } catch {
+      this.pendingBytes = new Uint8Array(0);
+      this.pendingValues = [];
+      this.badFrame('unreadable MessagePack');
+      return [];
+    }
+    this.pendingBytes = decoded.rest;
+    this.pendingValues.push(...decoded.values);
+    const messages = [];
+    while (this.pendingValues.length >= 3) {
+      const [type, epoch, payload] = this.pendingValues.splice(0, 3);
+      messages.push({ type, epoch, payload });
+    }
+    return messages;
+  }
+
+  /** An unusable frame is logged once per feed, never flooding the logs. */
+  badFrame(reason) {
+    if (!this.badFrameLogged) {
+      this.badFrameLogged = true;
+      this.logger.warn(`Sense real-time frame ignored (${reason}); the next ones are not logged`);
     }
   }
 

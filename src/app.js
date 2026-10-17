@@ -1,9 +1,8 @@
 // -----------------------------------------------------------------------------
 // The integration itself: the Sense session (sign-in, two-factor code,
 // renewal, kept across restarts), the monitor device and the devices Sense
-// detected, the real-time feed (throttled), today's trends and the 30-minute
-// consumption fed to the Gladys energy monitoring. index.js only wires the SDK
-// handlers to it.
+// detected, the real-time feed (throttled), and the 30-minute consumption fed
+// to the Gladys energy monitoring. index.js only wires the SDK handlers to it.
 // -----------------------------------------------------------------------------
 
 import { createLogger } from '@gladysassistant/integration-sdk';
@@ -12,12 +11,14 @@ import {
   APPLIANCE_POWER_THROTTLE,
   BAD_CREDENTIALS_RETRY,
   DEVICES_INTERVAL,
+  LIVE_RENEW_BACKOFF,
   LIVE_THROTTLE,
   LOGIN_RETRY,
   RATE_LIMIT_PAUSE,
   SESSION_KEY,
   STATES_PER_MINUTE,
   TRENDS_INTERVAL,
+  YESTERDAY_REREAD,
 } from './constants.js';
 import {
   FEATURE,
@@ -26,20 +27,12 @@ import {
   buildMonitorDevice,
   ids,
   liveStates,
-  totalStates,
 } from './devices.js';
 import { SenseError } from './http.js';
 import { T } from './i18n.js';
 import { SenseClient } from './sense/api.js';
 import { RealtimeFeed } from './sense/live.js';
-import {
-  appliancesOf,
-  dayTotals,
-  halfHoursOf,
-  liveOf,
-  monitorOf,
-  trendStart,
-} from './sense/model.js';
+import { appliancesOf, halfHoursOf, liveOf, monitorOf, trendStart } from './sense/model.js';
 
 const defaultTimers = { setTimeout, clearTimeout, setInterval, clearInterval };
 
@@ -47,6 +40,8 @@ const defaultTimers = { setTimeout, clearTimeout, setInterval, clearInterval };
 const FATAL = new Set(['no_credentials', 'bad_credentials', 'mfa_required', 'no_monitor']);
 const isFatal = (err) => err instanceof SenseError && FATAL.has(err.code);
 const minutes = (ms) => Math.max(1, Math.round(ms / 60_000));
+/** The test button answers within this delay, with the known status otherwise. */
+const TEST_ANSWER_WITHIN = 10_000;
 
 export class SenseApp {
   constructor({
@@ -70,14 +65,16 @@ export class SenseApp {
     this.client = undefined;
     this.session = undefined;
     this.savedSession = undefined;
+    this.sessionWrite = Promise.resolve();
     this.monitor = undefined;
     this.appliances = [];
     this.powers = new Map();
     this.usage = { today: undefined, yesterday: undefined };
     this.yesterdayFor = undefined;
-    this.totals = undefined;
+    this.consumptionWarned = false;
     this.live = undefined;
     this.liveConnected = false;
+    this.liveRenew = { attempts: 0, notBefore: -Infinity };
     this.lastLive = undefined;
     this.lastMainAt = -Infinity;
     this.lastApplianceAt = -Infinity;
@@ -102,6 +99,11 @@ export class SenseApp {
     return this.serialize(() => this.doStop());
   }
 
+  /** Resolves once every queued start/stop is done (tests, shutdown). */
+  idle() {
+    return this.lifecycle;
+  }
+
   /** The user saved the form: restart, unless nothing that matters changed. */
   configUpdated(raw = {}) {
     const next = normalizeConfig(raw);
@@ -118,11 +120,20 @@ export class SenseApp {
     return run;
   }
 
+  /** Run a periodic job; its errors are ignored once the integration restarted or stopped. */
+  task(job) {
+    const generation = this.generation;
+    return job().catch((err) =>
+      generation === this.generation ? this.runningError(err) : undefined,
+    );
+  }
+
   async doStart(raw) {
     await this.doStop();
     const generation = ++this.generation;
     this.raw = raw;
     this.config = normalizeConfig(raw);
+    this.liveRenew = { attempts: 0, notBefore: -Infinity };
     if (this.savedSession === undefined && typeof raw[SESSION_KEY] === 'string') {
       this.savedSession = raw[SESSION_KEY];
     }
@@ -145,7 +156,11 @@ export class SenseApp {
       await this.connect(generation);
       this.retryIndex = 0;
     } catch (err) {
-      await this.handleFailure(err, generation);
+      if (generation !== this.generation) {
+        return;
+      }
+      await this.doStop();
+      await this.handleFailure(err, this.generation);
     }
   }
 
@@ -162,27 +177,30 @@ export class SenseApp {
       this.monitor.id = this.client.monitorId;
     }
     await this.discover();
-    await this.refreshTrends();
     if (generation !== this.generation) {
       return;
     }
     this.running = true;
     this.timerIds.push(
-      this.timers.setInterval(
-        () => this.refreshTrends().catch((err) => this.runningError(err)),
-        TRENDS_INTERVAL,
-      ),
+      this.timers.setInterval(() => this.task(() => this.refreshTrends()), TRENDS_INTERVAL),
     );
     if (this.config.appliances) {
       this.timerIds.push(
-        this.timers.setInterval(
-          () => this.discover().catch((err) => this.runningError(err)),
-          DEVICES_INTERVAL,
-        ),
+        this.timers.setInterval(() => this.task(() => this.discover()), DEVICES_INTERVAL),
       );
     }
+    // The real time does not wait for the trends: a failed trend read only
+    // delays the energy monitoring.
     this.startLive();
     await this.reportOk();
+    try {
+      await this.refreshTrends();
+    } catch (err) {
+      if (isFatal(err)) {
+        throw err;
+      }
+      await this.runningError(err);
+    }
   }
 
   async doStop() {
@@ -277,7 +295,11 @@ export class SenseApp {
     }
   }
 
-  /** Keep the session (tokens, client id) outside the config schema, written only when it changed. */
+  /**
+   * Keep the session (tokens, client id) outside the config schema, written
+   * only when it changed, one write after the other (the last one wins); a
+   * failed write is tried again with the next change.
+   */
   saveSession(session) {
     this.session = session;
     const json = JSON.stringify(session);
@@ -285,9 +307,14 @@ export class SenseApp {
       return;
     }
     this.savedSession = json;
-    this.gladys
-      .setConfig({ [SESSION_KEY]: json })
-      .catch((err) => this.logger.warn(`Saving the Sense session failed: ${err.message}`));
+    this.sessionWrite = this.sessionWrite
+      .then(() => this.gladys.setConfig({ [SESSION_KEY]: json }))
+      .catch((err) => {
+        this.logger.warn(`Saving the Sense session failed: ${err.message}`);
+        if (this.savedSession === json) {
+          this.savedSession = undefined;
+        }
+      });
   }
 
   // --- Devices ---------------------------------------------------------------------
@@ -315,12 +342,8 @@ export class SenseApp {
   }
 
   /** The user asked for a scan: never throws at the SDK. */
-  async scan() {
-    try {
-      await this.discover();
-    } catch (err) {
-      await this.runningError(err);
-    }
+  scan() {
+    return this.task(() => this.discover());
   }
 
   /** The monitor device was just created: its consumption can be published now. */
@@ -330,21 +353,22 @@ export class SenseApp {
     }
   }
 
-  // --- Trends and energy monitoring ----------------------------------------------------
+  // --- Energy monitoring ---------------------------------------------------------------
 
   async refreshTrends() {
     if (!this.monitor) {
       return;
     }
-    const start = trendStart(this.now());
-    const today = await this.client.usage(start);
-    const solar = this.monitor.solar ? await this.client.usage(start, { solar: true }) : undefined;
+    const now = this.now();
+    const today = await this.client.usage(trendStart(now));
     this.usage.today = today;
-    this.totals = dayTotals(today, solar);
-    // Yesterday once per day (and at start): its last hours were still
-    // filling at the previous read.
+    // Yesterday once per day, and again at every refresh during the first
+    // hours of the day: Sense completes its last hours late.
     const dayStart = Date.parse(today?.start ?? '');
-    if (Number.isFinite(dayStart) && this.yesterdayFor !== today.start) {
+    if (
+      Number.isFinite(dayStart) &&
+      (this.yesterdayFor !== today.start || now - dayStart < YESTERDAY_REREAD)
+    ) {
       try {
         this.usage.yesterday = await this.client.usage(trendStart(dayStart - 12 * 60 * 60_000));
         this.yesterdayFor = today.start;
@@ -355,10 +379,6 @@ export class SenseApp {
         this.logger.warn(`Yesterday's Sense trend unavailable: ${err.message}`);
       }
     }
-    await this.publish(totalStates(this.gladys, this.monitor, this.totals), {
-      heartbeat: 6 * 60 * 60_000,
-      essential: true,
-    });
     await this.publishConsumption();
     await this.reportOk();
   }
@@ -383,9 +403,15 @@ export class SenseApp {
         ids.monitor(this.gladys, this.monitor.id).feature(FEATURE.CONSUMPTION),
         [...byStart.values()],
       );
+      this.consumptionWarned = false;
     } catch (err) {
-      // 404: the device is not created yet (published again at its creation).
-      this.logger.debug?.(`Sense consumption not published: ${err.message}`);
+      if (err?.status === 404) {
+        // The device is not created yet: published again at its creation.
+        this.logger.debug?.(`Sense consumption not published yet: ${err.message}`);
+      } else if (!this.consumptionWarned) {
+        this.consumptionWarned = true;
+        this.logger.warn(`Sense consumption refused by Gladys: ${err.message}`);
+      }
     }
   }
 
@@ -411,11 +437,28 @@ export class SenseApp {
     this.live.start();
   }
 
-  /** The feed suspects the token: renew it (rate-limited by the client) before it reconnects. */
+  /**
+   * The feed suspects the token: renew it before it reconnects. These
+   * renewals have their own backoff (5 min, doubling, up to 6 h), reset by
+   * the next realtime update, on top of the client's limit.
+   */
   async renewForLive() {
+    const now = this.now();
+    if (now < this.liveRenew.notBefore) {
+      this.logger.debug?.('Sense: token renewal for the feed postponed (backoff)');
+      return;
+    }
+    this.liveRenew.notBefore =
+      now +
+      Math.min(LIVE_RENEW_BACKOFF.max, LIVE_RENEW_BACKOFF.base * 2 ** this.liveRenew.attempts);
+    this.liveRenew.attempts += 1;
+    const generation = this.generation;
     try {
       await this.client.refresh();
     } catch (err) {
+      if (generation !== this.generation) {
+        return;
+      }
       if (isFatal(err)) {
         await this.runningError(err);
         return;
@@ -428,6 +471,7 @@ export class SenseApp {
   async onRealtime(payload) {
     const live = liveOf(payload);
     this.lastLive = live;
+    this.liveRenew.attempts = 0;
     if (live.devices) {
       this.powers = live.devices;
     }
@@ -488,6 +532,7 @@ export class SenseApp {
     return T.unreachable(err.message);
   }
 
+  /** The test button: a fresh read of the monitor, or the known status after 10 s. */
   async testConnection() {
     if (!this.config.email || !this.config.password) {
       return T.noCredentials;
@@ -495,15 +540,27 @@ export class SenseApp {
     if (!this.running) {
       return this.lastMessage ?? T.noCredentials;
     }
+    let timer;
+    const late = new Promise((resolve) => {
+      timer = this.timers.setTimeout(() => resolve(this.lastMessage), TEST_ANSWER_WITHIN);
+    });
+    const check = this.client.monitorOverview().then(
+      (overview) =>
+        T.test.ok(this.monitorName(), monitorOf(overview, this.monitor).solar, this.liveConnected),
+      (err) => this.messageOf(err),
+    );
     try {
-      const monitor = monitorOf(await this.client.monitorOverview(), this.monitor);
-      return T.test.ok(this.monitorName(), monitor.solar, this.liveConnected);
-    } catch (err) {
-      return this.messageOf(err);
+      return await Promise.race([check, late]);
+    } finally {
+      this.timers.clearTimeout(timer);
     }
   }
 
-  /** The "verify_mfa" action: complete a sign-in with the authenticator code. */
+  /**
+   * The "verify_mfa" action: complete a sign-in with the authenticator code.
+   * Answers as soon as Sense accepted the code; the integration then starts
+   * in the background.
+   */
   async verifyMfa(fields = {}) {
     const code = String(fields.code ?? '').replace(/\s+/g, '');
     if (!/^\d{6}$/.test(code)) {
@@ -535,8 +592,9 @@ export class SenseApp {
         }
         return this.messageOf(err);
       }
-      await this.doStart(this.raw);
-      return this.running ? T.mfa.ok : this.lastMessage;
+      // Queued after this job: the action does not wait for the start.
+      this.start(this.raw).catch((err) => this.logger.warn(`Sense start: ${err.message}`));
+      return T.mfa.ok;
     });
   }
 }

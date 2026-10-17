@@ -7,6 +7,7 @@ export class FakeSocket {
   constructor(url) {
     this.url = url;
     this.closed = false;
+    this.readyState = 1; // OPEN
     this.binaryType = 'blob';
     this.onmessage = null;
     this.onerror = null;
@@ -15,6 +16,13 @@ export class FakeSocket {
 
   close() {
     this.closed = true;
+    this.readyState = 3;
+  }
+
+  /** Node 22: a refused handshake raises an error, with no close event. */
+  fail() {
+    this.readyState = 3;
+    this.onerror?.({ message: 'Received network error or non-101 status code.' });
   }
 
   // --- Sense's side -----------------------------------------------------------

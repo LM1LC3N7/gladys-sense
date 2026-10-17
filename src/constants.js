@@ -37,6 +37,15 @@ export const BAD_CREDENTIALS_RETRY = 6 * 60 * 60_000;
 export const RENEW_MIN_GAP = 5 * 60_000;
 /** A 429 without Retry-After pauses every call for 15 minutes. */
 export const RATE_LIMIT_PAUSE = 15 * 60_000;
+/** Any 429 pause is kept between 1 minute and 6 hours, whatever Retry-After says. */
+export const RATE_LIMIT_MIN = 60_000;
+export const RATE_LIMIT_MAX = 6 * 60 * 60_000;
+/** Yesterday is read again at every refresh during the first hours of a day (late data). */
+export const YESTERDAY_REREAD = 3 * 60 * 60_000;
+/** Token renewals asked by the real-time feed: their own backoff, 5 min to 6 h. */
+export const LIVE_RENEW_BACKOFF = { base: 5 * 60_000, max: 6 * 60 * 60_000 };
+/** A MessagePack frame (with the bytes left from the previous ones) is refused above 1 MiB. */
+export const MSGPACK_MAX_BYTES = 1024 * 1024;
 
 /** Manifest keys (forever: stored by Gladys). */
 export const ACTIONS = { TEST: 'test_connection', MFA: 'verify_mfa' };

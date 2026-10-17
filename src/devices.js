@@ -21,10 +21,7 @@ export const FEATURE = {
   VOLTAGE_2: 'voltage_l2',
   FREQUENCY: 'frequency',
   CONSUMPTION: 'consumption',
-  TODAY_CONSUMPTION: 'today_consumption',
-  TODAY_PRODUCTION: 'today_production',
-  TODAY_FROM_GRID: 'today_from_grid',
-  TODAY_TO_GRID: 'today_to_grid',
+  GRID: 'grid_power',
   // a detected device
   APPLIANCE_POWER: 'power',
   APPLIANCE_ON: 'on',
@@ -52,7 +49,6 @@ const feature = (externalId, name, category, type, extra = {}) => ({
 /** The device of a monitor. `monitor` = { id, serial, timeZone, solar }. */
 export function buildMonitorDevice(gladys, monitor) {
   const id = ids.monitor(gladys, monitor.id);
-  const kwh = { unit: U.KILOWATT_HOUR, max: 10000 };
   const features = [
     feature(id.feature(FEATURE.POWER), 'Power consumed', C.ENERGY_SENSOR, T.ENERGY_SENSOR.POWER, {
       unit: U.WATT,
@@ -76,13 +72,6 @@ export function buildMonitorDevice(gladys, monitor) {
       T.ENERGY_SENSOR.THIRTY_MINUTES_CONSUMPTION,
       { unit: U.KILOWATT_HOUR, max: 1000 },
     ),
-    feature(
-      id.feature(FEATURE.TODAY_CONSUMPTION),
-      "Today's consumption",
-      C.ENERGY_SENSOR,
-      T.ENERGY_SENSOR.DAILY_CONSUMPTION,
-      kwh,
-    ),
   ];
   if (monitor.solar) {
     features.push(
@@ -93,27 +82,12 @@ export function buildMonitorDevice(gladys, monitor) {
         T.ENERGY_PRODUCTION_SENSOR.POWER,
         { unit: U.WATT },
       ),
-      feature(
-        id.feature(FEATURE.TODAY_PRODUCTION),
-        "Today's production",
-        C.ENERGY_PRODUCTION_SENSOR,
-        T.ENERGY_PRODUCTION_SENSOR.DAILY_PRODUCTION,
-        kwh,
-      ),
-      feature(
-        id.feature(FEATURE.TODAY_FROM_GRID),
-        'Imported from the grid today',
-        C.ENERGY_SENSOR,
-        T.ENERGY_SENSOR.ENERGY,
-        kwh,
-      ),
-      feature(
-        id.feature(FEATURE.TODAY_TO_GRID),
-        'Exported to the grid today',
-        C.ENERGY_SENSOR,
-        T.ENERGY_SENSOR.ENERGY,
-        kwh,
-      ),
+      // Signed grid exchange (import > 0, export < 0). No daily import/export
+      // totals: the core reads an `energy` feature as a cumulative index.
+      feature(id.feature(FEATURE.GRID), 'Grid power', C.GRID_SENSOR, T.GRID_SENSOR.POWER, {
+        unit: U.WATT,
+        min: -100000,
+      }),
     );
   }
   return {
@@ -165,24 +139,10 @@ export function liveStates(gladys, monitor, live) {
   return [
     ...state(id.feature(FEATURE.POWER), live.power),
     ...(monitor.solar ? state(id.feature(FEATURE.PRODUCTION), live.production) : []),
+    ...(monitor.solar ? state(id.feature(FEATURE.GRID), live.grid) : []),
     ...state(id.feature(FEATURE.VOLTAGE_1), live.voltage[0]),
     ...state(id.feature(FEATURE.VOLTAGE_2), live.voltage[1]),
     ...state(id.feature(FEATURE.FREQUENCY), live.frequency),
-  ];
-}
-
-/** Today's totals of the monitor (src/sense/model.js `dayTotals`). */
-export function totalStates(gladys, monitor, totals) {
-  const id = ids.monitor(gladys, monitor.id);
-  return [
-    ...state(id.feature(FEATURE.TODAY_CONSUMPTION), totals.consumption),
-    ...(monitor.solar
-      ? [
-          ...state(id.feature(FEATURE.TODAY_PRODUCTION), totals.production),
-          ...state(id.feature(FEATURE.TODAY_FROM_GRID), totals.fromGrid),
-          ...state(id.feature(FEATURE.TODAY_TO_GRID), totals.toGrid),
-        ]
-      : []),
   ];
 }
 

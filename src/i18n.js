@@ -49,8 +49,8 @@ export const T = {
       fr: 'Sense a refusé ce code : saisissez le code actuel (il change toutes les 30 secondes).',
     },
     ok: {
-      en: 'Code accepted: connected to Sense.',
-      fr: 'Code accepté : connecté à Sense.',
+      en: 'Code accepted: the integration connects to Sense, see its status.',
+      fr: 'Code accepté : l’intégration se connecte à Sense, voir son statut.',
     },
   },
   test: {

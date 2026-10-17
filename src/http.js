@@ -19,7 +19,8 @@ export function setFetch(impl) {
 }
 
 /**
- * Codes: network | timeout | unauthorized (401/403) | mfa_required |
+ * Codes: network | timeout | unauthorized (401, or 403 with Sense's JSON
+ * error) | blocked (403 without it: passing) | mfa_required |
  * rate_limited (429) | not_found | http (others) | bad_credentials | bad_mfa |
  * renew_refused | no_credentials | no_monitor.
  */
@@ -94,6 +95,11 @@ export async function request(path, { form, token, deviceId } = {}) {
       throw error;
     }
     const reason = reasonOf(body);
+    // A 403 without Sense's JSON error (a proxy or firewall page) refuses
+    // nothing: a passing error, retried like a 5xx.
+    if (status === 403 && !reason) {
+      throw new SenseError('blocked', 'Sense is not answering (403)', status);
+    }
     throw new SenseError(
       'unauthorized',
       `Sense refused the request (${status}${reason ? `: ${reason}` : ''})`,

@@ -3,7 +3,7 @@
 **Connecteur non officiel, sans lien avec Sense Labs.** Il amène votre
 moniteur d'énergie **Sense** (États-Unis et Canada) dans Gladys : la puissance
 consommée par la maison (et produite, avec du solaire) en temps réel, la
-tension et la fréquence, l'énergie du jour pour le suivi énergétique de Gladys
+tension et la fréquence, la consommation horaire pour le suivi énergétique de Gladys
 et, en option, les appareils détectés par Sense. Il utilise la même API cloud
 que l'application Sense, que Sense ne documente pas et peut changer à tout
 moment.
@@ -15,12 +15,12 @@ moment.
 
 ## Ce que vous obtenez
 
-| Surface                                 | Contenu                                                                                                                                          |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Un appareil par **moniteur Sense**      | puissance consommée (W), tension L1 et L2 (V), fréquence (Hz), consommation du jour (kWh), consommation par demi-heure pour le suivi énergétique |
-| Avec du **solaire**                     | puissance produite (W), production du jour, énergie importée du réseau et injectée dans le réseau aujourd'hui (kWh)                              |
-| Option **Appareils détectés par Sense** | un appareil par équipement détecté par Sense : marche/arrêt et puissance (W), en lecture seule                                                   |
-| Boutons                                 | **Tester la connexion**, **Saisir le code de double authentification**                                                                           |
+| Surface                                 | Contenu                                                                                                              |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Un appareil par **moniteur Sense**      | puissance consommée (W), tension L1 et L2 (V), fréquence (Hz), consommation par demi-heure pour le suivi énergétique |
+| Avec du **solaire**                     | puissance produite (W), puissance réseau (W, signée : positive en import, négative en injection)                     |
+| Option **Appareils détectés par Sense** | un appareil par équipement détecté par Sense : marche/arrêt et puissance (W), en lecture seule                       |
+| Boutons                                 | **Tester la connexion**, **Saisir le code de double authentification**                                               |
 
 ## Installation
 
@@ -42,10 +42,13 @@ Le flux temps réel donne une puissance, pas une énergie. L'intégration lit do
 la consommation horaire de Sense toutes les 15 minutes et publie chaque heure
 terminée d'aujourd'hui et d'hier en deux demi-heures **datées** sur la
 fonctionnalité « Consommation (30 min) » : le suivi énergétique reçoit la bonne
-énergie dans la bonne demi-heure et peut la tarifer avec votre contrat. Hier
-est relu une fois par jour, après minuit (heure du moniteur), pour ses
-dernières heures. Les fonctionnalités « du jour » (consommation, production,
-import, injection) sont des cumuls remis à zéro à minuit par Sense.
+énergie dans la bonne demi-heure et peut la tarifer avec votre contrat ;
+l'énergie d'un jour est la somme de ses demi-heures. Hier est relu à chaque
+rafraîchissement pendant les 3 premières heures du jour (heure du moniteur),
+pour ses dernières heures. Seuls aujourd'hui et hier sont lus : aucun
+historique plus ancien n'est rattrapé, un Gladys arrêté plus d'un jour garde
+un trou. La production, l'import et l'injection n'ont pas encore de total
+journalier (la puissance réseau montre l'échange en temps réel).
 
 ## Appareils détectés
 
@@ -60,17 +63,20 @@ suivante, jamais ceux du moniteur.
 
 - Comptes Sense des États-Unis et du Canada ; seul le premier moniteur du
   compte est lu.
-- Appels : une seule connexion temps réel (WebSocket) ; les tendances du jour
-  toutes les 15 minutes (deux appels avec du solaire), hier une fois par jour,
-  les appareils détectés toutes les 6 heures. États publiés : le moniteur au
+- Appels : une seule connexion temps réel (WebSocket) ; la consommation horaire
+  du jour toutes les 15 minutes, celle d'hier une fois par jour (à chaque
+  rafraîchissement pendant les 3 premières heures du jour), les appareils détectés toutes les 6 heures. États publiés : le moniteur au
   plus toutes les 10 secondes, la puissance des appareils détectés au plus
   toutes les minutes.
 - Reconnexion du temps réel : de 5 secondes jusqu'à 5 minutes, avec une part
   aléatoire. Après un échec de connexion : 5, 15, puis toutes les 60 minutes.
   E-mail ou mot de passe refusés : toutes les 6 heures. Quand Sense demande de
   ralentir (429), tous les appels attendent le délai demandé (15 minutes
-  sinon).
+  sinon), entre 1 minute et 6 heures.
 - Gladys n'a pas d'unité de fréquence : la fréquence est un simple nombre.
+- Les demi-heures suivent les heures pleines du moniteur : un fuseau décalé de
+  45 minutes (Gladys ou moniteur) ne tombe pas sur la grille de 30 minutes de
+  Gladys, et le suivi énergétique les refuse alors.
 
 ## Dépannage
 
@@ -87,9 +93,10 @@ suivante, jamais ceux du moniteur.
 
 ## Confidentialité
 
-Le mot de passe est stocké chiffré par Gladys et envoyé uniquement à
-`api.sense.com` pour se connecter. Les jetons de session sont stockés dans la
-configuration de l'intégration, hors du formulaire. Rien n'est journalisé avec
+Le mot de passe est gardé par Gladys dans sa base, jamais réaffiché, et envoyé
+seulement à `api.sense.com` pour se connecter. Les jetons de session (accès et
+renouvellement) sont gardés au même endroit, dans la configuration de
+l'intégration, hors du formulaire. Rien n'est journalisé avec
 l'e-mail, le mot de passe ou un jeton.
 
 ## Crédits

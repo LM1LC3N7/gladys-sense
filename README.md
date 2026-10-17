@@ -2,8 +2,8 @@
 
 [Gladys Assistant](https://gladysassistant.com) external integration for the
 **Sense energy monitor** (United States and Canada): power consumed and
-produced, voltage and frequency in real time, today's energy (consumed,
-produced, imported, exported) for the energy monitoring, and, as an option, the
+produced, grid power, voltage and frequency in real time, the hourly
+consumption for the energy monitoring, and, as an option, the
 devices Sense detected. **Unofficial, not affiliated with Sense Labs**: it uses
 the undocumented cloud API of the Sense app, as Home Assistant does. **Never
 tested with a real Sense monitor or account** (see TODO.md).
@@ -29,7 +29,9 @@ Gladys ⇄ SDK ⇄ src/app.js (SenseApp)
 - **Token**: a 401 renews it once (`POST renew` with the refresh token) and
   retries once; at most one renewal every 5 minutes; a refused renewal falls
   back to ONE sign-in with the password; refused credentials are tried again
-  every 6 hours only. A 429 pauses every call for its Retry-After (15 min
+  every 6 hours only. Only a 401, or a 403 with Sense's JSON error, is a
+  refusal; a bare 403 is a passing error. A 429 pauses every call for its
+  Retry-After, kept between 1 min and 6 h (15 min
   otherwise).
 - **Real time**: one WebSocket
   (`wss://clientrt.sense.com/monitors/<id>/realtimefeed`), JSON or MessagePack
@@ -37,8 +39,9 @@ Gladys ⇄ SDK ⇄ src/app.js (SenseApp)
   reopened after 90 s of silence. States published at most every 10 s (the
   power of the detected devices every minute), under a budget of 240 states a
   minute (Gladys takes 300).
-- **Trends**: `history/usage?scale=DAY` (and `/solar`) every 15 minutes:
-  today's totals as states, and the finished hours of today and yesterday as
+- **Energy**: `history/usage?scale=DAY` every 15 minutes (yesterday once a day,
+  and at every refresh during the first 3 hours of a day): the finished hours
+  of today and yesterday as
   dated 30-minute consumption (`publishEnergyConsumption`).
 - **Detected devices** (option): `devices/overview` at start and every 6 hours.
 

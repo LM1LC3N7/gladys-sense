@@ -31,7 +31,6 @@ import {
   mfaChallenge,
   overview,
   realtime,
-  solarUsage,
   todayUsage,
   yesterdayUsage,
 } from './fixtures/sense.js';
@@ -49,14 +48,15 @@ afterEach(() => fake?.restore());
 const MONITOR = `ext:sense:monitor:${MONITOR_ID}`;
 const CONFIG = { email: 'Me@Example.com ', password: 'pw' };
 
+/** The trend `start` is a UTC instant without its Z: never read it as local time. */
+const isYesterday = (query) => Date.parse(`${query.start}Z`) < Date.parse(TODAY_START);
+
 function setup({ config = CONFIG, routes = {}, solar = true, devices = [] } = {}) {
   fake = installFetch({
     authenticate: () => json(auth()),
     overview: () => json(overview({ solar })),
     devices: () => json(devicesOverview()),
-    usage: ({ query }) =>
-      json(Date.parse(query.start) < Date.parse(TODAY_START) ? yesterdayUsage() : todayUsage()),
-    solar: () => json(solarUsage()),
+    usage: ({ query }) => json(isYesterday(query) ? yesterdayUsage() : todayUsage()),
     renew: () => json({ access_token: 'acc-2', refresh_token: 'ref-2', user_id: 4242 }),
     ...routes,
   });
@@ -105,21 +105,14 @@ test('start: sign-in, monitor device, trends, one real-time socket, session kept
     'voltage_l2',
     'frequency',
     'consumption',
-    'today_consumption',
     'production_power',
-    'today_production',
-    'today_from_grid',
-    'today_to_grid',
+    'grid_power',
   ]);
   assert.ok(device.features.every((f) => f.read_only));
-  assert.equal(gladys.fake.lastState(feature('today_consumption')), 14.4);
-  assert.equal(gladys.fake.lastState(feature('today_production')), 11.3);
-  assert.equal(gladys.fake.lastState(feature('today_from_grid')), 6.2);
-  assert.equal(gladys.fake.lastState(feature('today_to_grid')), 3.1);
-  // Today, its solar side, and yesterday once.
+  // Today and yesterday (this is the first read).
   assert.deepEqual(
     fake.calls.map((c) => c.name),
-    ['authenticate', 'overview', 'usage', 'solar', 'usage'],
+    ['authenticate', 'overview', 'usage', 'usage'],
   );
   assert.ok(fake.calls.slice(1).every((c) => c.headers.Authorization === 'bearer acc-1'));
   assert.equal(sockets.sockets.length, 1);
@@ -180,8 +173,7 @@ test('without solar: no production features, no solar call', async () => {
   const keys = gladys.fake.discoveredDevices[0].features.map((f) =>
     f.external_id.split(':').at(-1),
   );
-  assert.ok(!keys.includes('production_power') && !keys.includes('today_to_grid'));
-  assert.equal(fake.named('solar').length, 0);
+  assert.ok(!keys.includes('production_power') && !keys.includes('grid_power'));
   await app.stop();
 });
 
@@ -205,6 +197,7 @@ test('real time: throttled states, budgeted detected devices', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(gladys.fake.lastState(feature('power')), 2500);
   assert.equal(gladys.fake.lastState(feature('production_power')), 1801);
+  assert.equal(gladys.fake.lastState(feature('grid_power')), 700);
   assert.equal(gladys.fake.lastState(feature('voltage_l1')), 121.3);
   assert.equal(gladys.fake.lastState(feature('frequency')), 59.99);
   const fridge = `ext:sense:appliance:${MONITOR_ID}_fridge1`;
@@ -271,6 +264,7 @@ test('two-factor: status, then the action completes the sign-in', async () => {
   ack = await gladys.fake.action(ACTIONS.MFA, { code: '654 321' });
   assert.match(ack.data.message.en, /Code accepted/);
   assert.equal(mfaAccepted, true);
+  await app.idle(); // the start runs after the answer
   assert.equal(fake.named('authenticate').length, 2, 'a fresh sign-in after the refused code');
   assert.equal(gladys.fake.connectionStatus.connected, true);
   assert.equal(sockets.sockets.length, 1);
@@ -327,9 +321,7 @@ test('an expired token while running: renewed once, the trends go on', async () 
       usage: ({ headers, query }) =>
         expired && headers.Authorization === 'bearer acc-1'
           ? json({}, 401)
-          : json(
-              Date.parse(query.start) < Date.parse(TODAY_START) ? yesterdayUsage() : todayUsage(),
-            ),
+          : json(isYesterday(query) ? yesterdayUsage() : todayUsage()),
     },
   });
   await app.start(CONFIG);
@@ -393,5 +385,87 @@ test('test button and scan', async () => {
   assert.match(ack.data.message.en, /Connected to Sense N123A456 \(solar\)/);
   await gladys.fake.scanRequest();
   assert.equal(gladys.fake.discoveredDevices.length, 1);
+  await app.stop();
+});
+
+test('no monitor feature is read as a cumulative index by the core', async () => {
+  const ENERGY_INDEX_FEATURE_TYPES = ['index', 'energy', 'input-index', 'output-index'];
+  const { app, gladys } = setup({ config: { ...CONFIG, appliances: true } });
+  await app.start({ ...CONFIG, appliances: true });
+  for (const device of gladys.fake.discoveredDevices) {
+    for (const f of device.features) {
+      assert.ok(!ENERGY_INDEX_FEATURE_TYPES.includes(f.type), `${f.external_id}: ${f.type}`);
+    }
+  }
+  const grid = gladys.fake.discoveredDevices[0].features.find((f) =>
+    f.external_id.endsWith(':grid_power'),
+  );
+  assert.deepEqual([grid.category, grid.type, grid.unit], ['grid-sensor', 'power', 'watt']);
+  assert.ok(grid.min < 0, 'signed: export is negative');
+  await app.stop();
+});
+
+test('yesterday is read again at every refresh during the first 3 hours of the day', async () => {
+  const { app, timers, clock } = setup();
+  clock.now = Date.parse(TODAY_START) + 60 * 60_000 + 5 * 60_000; // 01:05 local
+  await app.start(CONFIG);
+  const yesterdayReads = () => fake.named('usage').filter((c) => isYesterday(c.query)).length;
+  assert.equal(yesterdayReads(), 1);
+  clock.now += TRENDS_INTERVAL;
+  await timers.runIntervals(TRENDS_INTERVAL);
+  assert.equal(yesterdayReads(), 2, 'still in the first hours');
+  clock.now = Date.parse(TODAY_START) + 3 * 60 * 60_000 + 60_000; // 03:01 local
+  await timers.runIntervals(TRENDS_INTERVAL);
+  assert.equal(yesterdayReads(), 2, 'then once a day only');
+  await app.stop();
+});
+
+test('the real time starts even when the trends fail', async () => {
+  const { app, gladys, sockets, timers } = setup({ routes: { usage: () => json({}, 500) } });
+  await app.start(CONFIG);
+  assert.equal(sockets.sockets.length, 1);
+  assert.match(gladys.fake.connectionStatus.message.en, /unreachable/);
+  assert.deepEqual(
+    timers.intervals().map((t) => t.ms),
+    [TRENDS_INTERVAL],
+    'the trends are tried again',
+  );
+  sockets.sockets[0].receive({ type: 'realtime_update', payload: realtime() });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(gladys.fake.connectionStatus.connected, true);
+  await app.stop();
+});
+
+test('an error of a job started before a restart is ignored', async () => {
+  let fail;
+  const { app, gladys, timers } = setup({
+    routes: {
+      usage: ({ query }) =>
+        fail ? fail.promise : json(isYesterday(query) ? yesterdayUsage() : todayUsage()),
+    },
+  });
+  await app.start(CONFIG);
+  fail = Promise.withResolvers();
+  const job = timers.runIntervals(TRENDS_INTERVAL);
+  await app.stop();
+  fail.resolve(json({}, 503));
+  await job;
+  assert.doesNotMatch(gladys.fake.connectionStatus.message.en, /unreachable/);
+});
+
+test('a refused setConfig is written again with the next session change', async () => {
+  const { app, gladys, clock } = setup();
+  const setConfig = gladys.setConfig.bind(gladys);
+  let refuse = true;
+  gladys.setConfig = (values) => (refuse ? Promise.reject(new Error('busy')) : setConfig(values));
+  await app.start(CONFIG);
+  await app.sessionWrite;
+  assert.equal(gladys.fake.config[SESSION_KEY], undefined);
+  assert.equal(app.savedSession, undefined, 'forgotten: written again next time');
+  refuse = false;
+  clock.now += 6 * 60_000;
+  await app.client.refresh();
+  await app.sessionWrite;
+  assert.equal(storedSession(gladys).access_token, 'acc-2');
   await app.stop();
 });

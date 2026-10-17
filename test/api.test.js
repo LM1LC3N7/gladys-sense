@@ -132,19 +132,28 @@ test('a refused renewal falls back to ONE sign-in with the password', async () =
     onSession: (s) => sessions.push(s),
   });
   await assert.rejects(c.refresh(), { code: 'mfa_required' });
-  assert.equal(sessions[0].refresh_token, '', 'the dead session is forgotten');
+  assert.deepEqual(sessions, [], 'the session is replaced only by a successful sign-in');
   assert.deepEqual(
     fake.calls.map((x) => x.name),
     ['renew', 'authenticate'],
   );
-  // A passing error of the renewal is not a refusal.
-  fake.restore();
-  fake = installFetch({ renew: () => json({}, 503) });
-  clock.now += 10 * 60_000;
-  const d = client({ session: { user_id: '1', refresh_token: 'r', monitor_id: 'm' } });
-  await assert.rejects(d.refresh(), { code: 'http' });
-  assert.equal(d.refreshToken, 'r');
-  clock.now = NOW;
+  // A passing error of the renewal is not a refusal: no password sign-in.
+  for (const [answer, code] of [
+    [() => json({}, 503), 'http'],
+    [() => new Response('<html>blocked</html>', { status: 403 }), 'blocked'],
+    [() => json({}, 400), 'http'],
+    [() => json({}, 404), 'not_found'],
+  ]) {
+    fake.restore();
+    fake = installFetch({ renew: answer });
+    const d = client({ session: { user_id: '1', refresh_token: 'r', monitor_id: 'm' } });
+    await assert.rejects(d.refresh(), { code });
+    assert.equal(d.refreshToken, 'r');
+    assert.deepEqual(
+      fake.calls.map((x) => x.name),
+      ['renew'],
+    );
+  }
 });
 
 test('concurrent renewals share one call', async () => {
@@ -171,6 +180,51 @@ test('a 429 pauses every call for its Retry-After', async () => {
   clock.now = NOW;
 });
 
+test('the 429 pause stays between 1 minute and 6 hours', async () => {
+  for (const [header, pause] of [
+    ['0', 60_000],
+    [new Date(NOW - 3_600_000).toUTCString(), 60_000],
+    ['1000000000', 6 * 3_600_000],
+    [undefined, 15 * 60_000],
+  ]) {
+    fake?.restore();
+    fake = installFetch({
+      overview: () => json({}, 429, header === undefined ? {} : { 'retry-after': header }),
+    });
+    const c = client({
+      session: { user_id: '1', refresh_token: 'r', monitor_id: 'm', access_token: 'a' },
+    });
+    await assert.rejects(c.monitorOverview(), (err) => err.retryAfter === pause);
+    assert.equal(c.pausedUntil, NOW + pause, String(header));
+  }
+});
+
+test('a 403 refuses only with Sense JSON error', async () => {
+  fake = installFetch({
+    overview: () => new Response('<html>Forbidden</html>', { status: 403 }),
+    devices: () => json({ status: 'error', error_reason: 'Not allowed' }, 403),
+    renew: () => json({ access_token: 'n' }),
+  });
+  const c = client({
+    session: { user_id: '1', refresh_token: 'r', monitor_id: 'm', access_token: 'a' },
+  });
+  await assert.rejects(c.monitorOverview(), { code: 'blocked' });
+  assert.equal(fake.named('renew').length, 0, 'a passing 403 renews nothing');
+  await assert.rejects(c.devicesOverview(), { code: 'unauthorized' });
+  assert.equal(fake.named('renew').length, 1);
+});
+
+test('any 4xx of the code step forgets the mfa token', async () => {
+  fake = installFetch({
+    authenticate: () => json(mfaChallenge, 401),
+    mfa: () => json({}, 400),
+  });
+  const c = client();
+  await assert.rejects(c.login(), { code: 'mfa_required' });
+  await assert.rejects(c.verifyMfa('123456'), { code: 'http' });
+  assert.equal(c.mfaToken, '');
+});
+
 test('HTTP errors never carry the URL, the body or the credentials', async () => {
   fake = installFetch({
     usage: () => {
@@ -193,16 +247,14 @@ test('HTTP errors never carry the URL, the body or the credentials', async () =>
 });
 
 test('the trends are asked for a DAY from a UTC start', async () => {
-  fake = installFetch({ usage: () => json({}), solar: () => json({}) });
+  fake = installFetch({ usage: () => json({}) });
   const c = client({
     session: { user_id: '1', refresh_token: 'r', monitor_id: MONITOR_ID, access_token: 'a' },
   });
   await c.usage('2026-10-16T18:20:00');
-  await c.usage('2026-10-16T18:20:00', { solar: true });
   assert.match(fake.calls[0].path, new RegExp(`/app/monitors/${MONITOR_ID}/history/usage$`));
   assert.deepEqual(fake.calls[0].query, { scale: 'DAY', start: '2026-10-16T18:20:00' });
   assert.equal(fake.calls[0].headers.Authorization, 'bearer a');
-  assert.equal(fake.calls[1].name, 'solar');
 });
 
 test('Retry-After in seconds or as a date', () => {

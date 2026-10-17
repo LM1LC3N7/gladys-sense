@@ -13,7 +13,7 @@ Ported to JavaScript in `src/sense/api.js`, `src/sense/live.js` and
 sign-in and its two-factor step (`mfa_token`, `authenticate/mfa`), the token
 renewal (`renew`) and the "renew once, then retry" rule on a 401, the URL and
 the frame layout of the real-time feed, the filtering of the detected devices,
-the daily totals with solar and the `start` parameter of the trends.
+the hourly breakdown of a day and the `start` parameter of the trends.
 
 ```
 Copyright 2018 Scott Belisle

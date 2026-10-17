@@ -8,7 +8,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const MOJIBAKE = /[ÂÃ][\u0080-¿€]|â€/;
+// Â, Ã and Å never appear in these English and French texts: any of them is
+// the first byte of a UTF-8 sequence read as Latin-1, whatever follows.
+const MOJIBAKE = /[ÂÃÅ]|â€/;
 const FILES = [
   'gladys-assistant-integration.json',
   'docs/en.md',
@@ -38,5 +40,7 @@ test('the mojibake pattern catches what it should', () => {
   assert.match('Â«', MOJIBAKE, '« read as Latin-1');
   assert.match('lâ€™app', MOJIBAKE, '’ read as Windows-1252');
   assert.match('finâ€¦', MOJIBAKE, '… read as Windows-1252');
+  assert.match('Ã ', MOJIBAKE, 'à read as Windows-1252, its second byte lost');
+  assert.match('Å“uvre', MOJIBAKE, 'œ read as Windows-1252');
   assert.doesNotMatch('Français « Découverte » 800×534 — l’app…', MOJIBAKE);
 });

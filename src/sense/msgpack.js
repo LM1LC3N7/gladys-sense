@@ -3,15 +3,23 @@
 // enough for the Sense real-time feed: recent versions of sense-energy ask
 // for msgpack frames (three concatenated values: type, epoch, payload). This
 // integration asks for JSON, but decodes a binary frame the same way rather
-// than depend on a library. Extension types are skipped (decoded as null).
+// than depend on a library. Extension types are skipped (decoded as null);
+// nesting is bounded (MAX_DEPTH), a value cut at the end of a frame is kept
+// for the next one (decode returns its bytes as `rest`).
 // -----------------------------------------------------------------------------
 
 class Truncated extends Error {}
 
+/** Deeper containers are refused: the feed nests three levels at most. */
+export const MAX_DEPTH = 32;
+
 const textDecoder = new TextDecoder();
 
-/** Decode every complete value of `input` (Uint8Array, ArrayBuffer or Buffer). */
-export function decodeAll(input) {
+/**
+ * Decode every complete value of `input` (Uint8Array, ArrayBuffer or Buffer):
+ * `{ values, rest }`, `rest` holding the bytes of a value cut at the end.
+ */
+export function decode(input) {
   const bytes =
     input instanceof Uint8Array ? input : new Uint8Array(input instanceof ArrayBuffer ? input : []);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -43,18 +51,18 @@ export function decodeAll(input) {
     take(1 + n); // type byte + data
     return null;
   };
-  const array = (n) => {
+  const array = (n, depth) => {
     const out = [];
     for (let i = 0; i < n; i += 1) {
-      out.push(read());
+      out.push(read(depth));
     }
     return out;
   };
-  const map = (n) => {
+  const map = (n, depth) => {
     const out = {};
     for (let i = 0; i < n; i += 1) {
-      const key = String(read());
-      const value = read();
+      const key = String(read(depth));
+      const value = read(depth);
       if (key !== '__proto__') {
         out[key] = value;
       }
@@ -62,12 +70,15 @@ export function decodeAll(input) {
     return out;
   };
 
-  function read() {
+  function read(depth = 0) {
+    if (depth > MAX_DEPTH) {
+      throw new Error('MessagePack value nested too deep');
+    }
     const b = u8();
     if (b <= 0x7f) return b;
     if (b >= 0xe0) return b - 0x100;
-    if (b >= 0x80 && b <= 0x8f) return map(b & 0x0f);
-    if (b >= 0x90 && b <= 0x9f) return array(b & 0x0f);
+    if (b >= 0x80 && b <= 0x8f) return map(b & 0x0f, depth + 1);
+    if (b >= 0x90 && b <= 0x9f) return array(b & 0x0f, depth + 1);
     if (b >= 0xa0 && b <= 0xbf) return str(b & 0x1f);
     switch (b) {
       case 0xc0:
@@ -125,13 +136,13 @@ export function decodeAll(input) {
       case 0xdb:
         return str(u32());
       case 0xdc:
-        return array(u16());
+        return array(u16(), depth + 1);
       case 0xdd:
-        return array(u32());
+        return array(u32(), depth + 1);
       case 0xde:
-        return map(u16());
+        return map(u16(), depth + 1);
       case 0xdf:
-        return map(u32());
+        return map(u32(), depth + 1);
       default:
         throw new Error(`Invalid MessagePack byte 0x${b.toString(16)}`);
     }
@@ -139,14 +150,18 @@ export function decodeAll(input) {
 
   const values = [];
   while (pos < bytes.length) {
+    const start = pos;
     try {
       values.push(read());
     } catch (err) {
       if (err instanceof Truncated) {
-        break; // an incomplete value at the end: dropped
+        return { values, rest: bytes.slice(start) };
       }
       throw err;
     }
   }
-  return values;
+  return { values, rest: new Uint8Array(0) };
 }
+
+/** The complete values of `input` (a value cut at the end is dropped). */
+export const decodeAll = (input) => decode(input).values;
