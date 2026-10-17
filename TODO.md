@@ -23,9 +23,9 @@
 - [ ] `history/usage?scale=DAY` answers the monitor's local day containing
       `start` (read as UTC), with one `usage_breakdown_kwh` value per clock
       hour from `start`, as sense-energy assumes.
-- [ ] The `grid-sensor` category and its `power` type exist in the core
-      from Gladys 5.2.0 (the SDK 0.15 mirror has them; the first core release
-      carrying them was not checked); otherwise raise `gladys_version`.
+- [x] The `grid-sensor` category, its `power` type and the `watt` unit exist
+      in the core from Gladys 5.2.0 (checked at tag v5.2.0: GRID_SENSOR, type
+      power, unit WATT).
 - [ ] Whether the feed sends `grid_w`; otherwise the grid power is `w` -
       `solar_w`.
 - [ ] How late Sense completes the last hours of a day (yesterday is read
@@ -64,7 +64,7 @@
   error retried like a 5xx. The password fallback follows a real refusal of
   `renew` only, and the stored session is replaced only by a successful
   sign-in. Renewals asked by the feed have their own backoff (5 min doubling
-  up to 6 h, reset by the next realtime update). Errors of a job started
+  up to 6 h, fully reset by the next realtime update). Errors of a job started
   before a restart are ignored. The session writes (`setConfig`) are chained;
   a failed one is written again with the next change.
 - **One real-time connection** (the first monitor of the account, as

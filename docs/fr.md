@@ -93,10 +93,12 @@ suivante, jamais ceux du moniteur.
 
 ## Confidentialité
 
-Le mot de passe est gardé par Gladys dans sa base, jamais réaffiché, et envoyé
+Le mot de passe est gardé par Gladys dans sa base, **non chiffré** (en clair
+dans la base de Gladys et dans ses sauvegardes), jamais réaffiché, et envoyé
 seulement à `api.sense.com` pour se connecter. Les jetons de session (accès et
-renouvellement) sont gardés au même endroit, dans la configuration de
-l'intégration, hors du formulaire. Rien n'est journalisé avec
+renouvellement) sont gardés au même endroit, non chiffrés eux aussi, dans la
+configuration de l'intégration, hors du formulaire. Protégez les sauvegardes de
+Gladys en conséquence. Rien n'est journalisé avec
 l'e-mail, le mot de passe ou un jeton.
 
 ## Crédits

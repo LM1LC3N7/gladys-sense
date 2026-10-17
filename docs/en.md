@@ -87,9 +87,11 @@ reached, they wait for the next minute, never the monitor's.
 
 ## Privacy
 
-The password is kept by Gladys in its database, never shown again, and only
-sent to `api.sense.com` to sign in. The session tokens (access and refresh) are
-kept in the same place, in the integration's configuration, outside the form.
+The password is kept by Gladys in its database, **not encrypted** (in clear in
+the Gladys database and in its backups), never shown again, and only sent to
+`api.sense.com` to sign in. The session tokens (access and refresh) are kept in
+the same place, also not encrypted, in the integration's configuration, outside
+the form. Protect the Gladys backups accordingly.
 Nothing is logged with the e-mail, the password or a token.
 
 ## Credits

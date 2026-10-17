@@ -439,8 +439,9 @@ export class SenseApp {
 
   /**
    * The feed suspects the token: renew it before it reconnects. These
-   * renewals have their own backoff (5 min, doubling, up to 6 h), reset by
-   * the next realtime update, on top of the client's limit.
+   * renewals have their own backoff (5 min, doubling, up to 6 h), fully
+   * reset (attempts and waiting time) by the next realtime update, on top of
+   * the client's own limit of one renewal every 5 minutes.
    */
   async renewForLive() {
     const now = this.now();
@@ -471,7 +472,8 @@ export class SenseApp {
   async onRealtime(payload) {
     const live = liveOf(payload);
     this.lastLive = live;
-    this.liveRenew.attempts = 0;
+    // The feed works: its renewal backoff starts over.
+    this.liveRenew = { attempts: 0, notBefore: -Infinity };
     if (live.devices) {
       this.powers = live.devices;
     }
