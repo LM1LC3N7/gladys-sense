@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-17
+
 ### Added
 
 - Sign-in to a Sense account (United States and Canada) with its e-mail and
@@ -34,4 +36,5 @@ the notes of the version's GitHub Release.
 - `THIRD_PARTY_NOTICES.md` with the MIT license of sense-energy
   (scottbonline/sense), shipped in the image with `LICENSE`.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-sense/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-sense/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-sense/releases/tag/v0.1.1

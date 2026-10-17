@@ -1,6 +1,6 @@
 {
   "name": "gladys-sense",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Sense energy monitor (United States and Canada) for Gladys Assistant: live power, voltage and frequency over the real-time feed, today's energy for the energy monitoring, and the devices Sense detected.",
   "type": "module",
