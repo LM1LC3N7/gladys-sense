@@ -2,7 +2,7 @@
 
 ## Before announcing
 
-- [ ] Test on a real Gladys 5.2+ with a real Sense account (with and without
+- [ ] Test on a real Gladys 5.3+ with a real Sense account (with and without
       solar, with and without two-factor authentication): sign-in, the code
       button, a restart without a new code, the real-time states, the grid
       power with solar, the 30-minute consumption in the energy monitoring, the detected
